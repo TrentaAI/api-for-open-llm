@@ -1,9 +1,13 @@
 import gc
-from typing import Iterable, List, Tuple, Optional
+import re
+from typing import Iterable, Optional, List
 
 import torch
 import torch.nn.functional as F
+from loguru import logger
+from transformers import PreTrainedTokenizer
 from transformers.generation.logits_process import (
+    LogitsProcessor,
     LogitsProcessorList,
     RepetitionPenaltyLogitsProcessor,
     TemperatureLogitsWarper,
@@ -12,11 +16,37 @@ from transformers.generation.logits_process import (
 )
 
 from api.constants import ErrorCode
-from api.prompt import get_prompt_adapter
+from api.prompt_adapter import get_prompt_adapter
 
 server_error_msg = (
     "**NETWORK ERROR DUE TO HIGH TRAFFIC. PLEASE REGENERATE OR REFRESH THIS PAGE.**"
 )
+
+
+class InvalidScoreLogitsProcessor(LogitsProcessor):
+    def __call__(
+        self, input_ids: torch.LongTensor, scores: torch.FloatTensor
+    ) -> torch.FloatTensor:
+        if torch.isnan(scores).any() or torch.isinf(scores).any():
+            scores.zero_()
+            scores[..., 5] = 5e4
+        return scores
+
+
+def process_response(response):
+    response = response.strip()
+    response = response.replace("[[训练时间]]", "2023年")
+    punkts = [
+        [",", "，"],
+        ["!", "！"],
+        [":", "："],
+        [";", "；"],
+        ["\?", "？"],
+    ]
+    for item in punkts:
+        response = re.sub(r"([\u4e00-\u9fff])%s" % item[0], r"\1%s" % item[1], response)
+        response = re.sub(r"%s([\u4e00-\u9fff])" % item[0], r"%s\1" % item[1], response)
+    return response
 
 
 def prepare_logits_processor(
@@ -35,77 +65,122 @@ def prepare_logits_processor(
     return processor_list
 
 
-def chatglm_stream_token_num(tokenizer, query: str, history: List[Tuple[str, str]] = None):
-    if history is None:
-        history = []
-    if not history:
-        prompt = query
-    else:
-        prompt = ""
-        for i, (old_query, response) in enumerate(history):
-            prompt += "[Round {}]\n问：{}\n答：{}\n".format(i, old_query, response)
-        prompt += "[Round {}]\n问：{}\n答：".format(len(history), query)
-    inputs = tokenizer([prompt])
-    return sum([len(x) for x in inputs["input_ids"]])
+def is_partial_stop(output: str, stop_str: str):
+    """Check whether the output contains a partial stop str."""
+    for i in range(0, min(len(output), len(stop_str))):
+        if stop_str.startswith(output[-i:]):
+            return True
+    return False
+
+
+def build_baichuan_chat_input(tokenizer, messages: List[dict], context_len: int = 4096):
+    """  https://huggingface.co/baichuan-inc/Baichuan-13B-Chat/blob/main/modeling_baichuan.py """
+    total_input, round_input = [], []
+    for message in messages[::-1]:
+        content_tokens = tokenizer.encode(message["content"])
+        if message["role"] in ["user", "system"]:
+            round_input = [195] + content_tokens + round_input
+            if total_input and len(total_input) + len(round_input) > context_len:
+                break
+            else:
+                total_input = round_input + total_input
+                round_input = []
+        elif message["role"] == "assistant":
+            round_input = [196] + content_tokens + round_input
+        else:
+            raise ValueError(f"message role not supported yet: {message['role']}")
+    total_input = total_input[-context_len:]  # truncate left
+    total_input.append(196)
+    return total_input
+
+
+def build_qwen_chat_input(
+    tokenizer: PreTrainedTokenizer,
+    messages: List[dict],
+    max_window_size: int = 6144,
+):
+    """ https://huggingface.co/Qwen/Qwen-7B-Chat/blob/main/qwen_generation_utils.py """
+    im_start_tokens, im_end_tokens = [tokenizer.im_start_id], [tokenizer.im_end_id]
+    nl_tokens = tokenizer.encode("\n")
+
+    def _tokenize_str(role, content):
+        return tokenizer.encode(
+            role, allowed_special=set()
+        ) + nl_tokens + tokenizer.encode(content, allowed_special=set())
+
+    system_tokens_part = _tokenize_str("system", "You are a helpful assistant.")
+    system_tokens = im_start_tokens + system_tokens_part + im_end_tokens
+
+    context_tokens = []
+    for i, message in enumerate(messages[::-1]):
+        content = message["content"]
+        if context_tokens:
+            context_tokens = nl_tokens + context_tokens
+
+        if message["role"] == "user":
+            content_tokens = _tokenize_str("user", content)
+        elif message["role"] == "system":
+            content_tokens = _tokenize_str("system", content)
+        elif message["role"] == "assistant":
+            content_tokens = _tokenize_str("assistant", content)
+        else:
+            raise ValueError(f"message role not supported yet: {message['role']}")
+
+        if len(im_start_tokens + content_tokens + im_end_tokens + context_tokens) > max_window_size:
+            break
+        else:
+            context_tokens = im_start_tokens + content_tokens + im_end_tokens + context_tokens
+
+    context_tokens = system_tokens + nl_tokens + context_tokens
+    return context_tokens + nl_tokens + im_start_tokens + tokenizer.encode("assistant") + nl_tokens
 
 
 @torch.inference_mode()
-def chatglm_generate_stream(model, tokenizer, params, device, context_len=2048, stream_interval=2):
-    """Generate text using model's chat api"""
-    messages = params["prompt"]
-    temperature = float(params.get("temperature", 0.95))
-    top_p = float(params.get("top_p", 0.7))
+def generate_stream_chatglm(
+    model,
+    tokenizer,
+    params,
+    device,
+    context_len=2048,
+    stream_interval=2,
+):
+    prompt = params["prompt"]
+    temperature = float(params.get("temperature", 1.0))
     repetition_penalty = float(params.get("repetition_penalty", 1.0))
+    top_p = float(params.get("top_p", 1.0))
+    max_new_tokens = int(params.get("max_new_tokens", 256))
     echo = params.get("echo", True)
 
+    inputs = tokenizer([prompt], return_tensors="pt").to(model.device)
+    input_echo_len = len(inputs["input_ids"][0])
+
     gen_kwargs = {
-        "max_length": context_len,
+        "max_length": max_new_tokens + input_echo_len,
         "do_sample": True if temperature > 1e-5 else False,
         "top_p": top_p,
         "repetition_penalty": repetition_penalty,
-        "logits_processor": None,
+        "logits_processor": [InvalidScoreLogitsProcessor()],
     }
     if temperature > 1e-5:
         gen_kwargs["temperature"] = temperature
 
-    if isinstance(messages, list):
-        query = messages.pop()["content"]
-
-        question, history = '', []
-        for message in messages:
-            role, content = message["role"], message["content"]
-            if role == 'user':
-                question += content
-            elif role in ['assistant', 'AI', 'system']:
-                if role == 'system':
-                    history.append((content, "好的，我明白了，我会尽可能准确地回答您的问题。"))
-                else:
-                    history.append((question, content))
-                    question = ""
-            else:
-                raise ValueError(f"Unknown role: {message['role']}")
-
-        if question:
-            query = question + query
-    else:
-        query, history = messages, []
-
-    input_echo_len = chatglm_stream_token_num(tokenizer, query, history)
-
-    for i, (response, new_hist) in enumerate(
-        model.stream_chat(tokenizer, query, history, **gen_kwargs)
-    ):
+    total_len = 0
+    for total_ids in model.stream_generate(**inputs, **gen_kwargs):
+        total_ids = total_ids.tolist()[0]
+        total_len = len(total_ids)
         if echo:
-            output = query + " " + response
+            output_ids = total_ids
         else:
-            output = response
+            output_ids = total_ids[input_echo_len:]
+        response = tokenizer.decode(output_ids)
+        response = process_response(response)
 
         yield {
-            "text": output,
+            "text": response,
             "usage": {
                 "prompt_tokens": input_echo_len,
-                "completion_tokens": i,
-                "total_tokens": input_echo_len + i,
+                "completion_tokens": total_len - input_echo_len,
+                "total_tokens": total_len,
             },
             "finish_reason": None,
         }
@@ -113,11 +188,11 @@ def chatglm_generate_stream(model, tokenizer, params, device, context_len=2048, 
     # TODO: ChatGLM stop when it reach max length
     # Only last stream result contains finish_reason, we set finish_reason as stop
     ret = {
-        "text": output,
+        "text": response,
         "usage": {
             "prompt_tokens": input_echo_len,
-            "completion_tokens": i,
-            "total_tokens": input_echo_len + i,
+            "completion_tokens": total_len - input_echo_len,
+            "total_tokens": total_len,
         },
         "finish_reason": "stop",
     }
@@ -129,34 +204,47 @@ def chatglm_generate_stream(model, tokenizer, params, device, context_len=2048, 
 
 @torch.inference_mode()
 def generate_stream(
-    model, tokenizer, params, device, context_len=2048, stream_interval=2
+    model,
+    tokenizer,
+    params,
+    device: str,
+    context_len: int,
+    stream_interval: int = 2,
 ):
+    # Read parameters
     prompt = params["prompt"]
-    len_prompt = len(prompt)
     temperature = float(params.get("temperature", 1.0))
     repetition_penalty = float(params.get("repetition_penalty", 1.0))
     top_p = float(params.get("top_p", 1.0))
     top_k = int(params.get("top_k", -1))  # -1 means disable
-    max_new_tokens = int(params.get("max_new_tokens", 512))
-    stop_str = params.get("stop", None)
+    max_new_tokens = int(params.get("max_new_tokens", 256))
     echo = bool(params.get("echo", True))
+    stop_str = params.get("stop", None)
+
     stop_token_ids = params.get("stop_token_ids", None) or []
-    stop_token_ids.append(tokenizer.eos_token_id)
+    if tokenizer.eos_token_id not in stop_token_ids:
+        stop_token_ids.append(tokenizer.eos_token_id)
 
     logits_processor = prepare_logits_processor(
         temperature, repetition_penalty, top_p, top_k
     )
 
-    input_ids = tokenizer(prompt).input_ids
-    input_echo_len = len(input_ids)
-    output_ids = list(input_ids)
-
-    if model.config.is_encoder_decoder:
-        max_src_len = context_len
+    if isinstance(prompt, list) and "BaichuanLayer" in getattr(model, "_no_split_modules", []):
+        input_ids = build_baichuan_chat_input(tokenizer, prompt, context_len)
+    elif isinstance(prompt, list) and "QWenBlock" in getattr(model, "_no_split_modules", []):
+        input_ids = build_qwen_chat_input(tokenizer, prompt)
+        stop_token_ids.extend([tokenizer.im_end_id, tokenizer.im_start_id])
     else:
-        max_src_len = context_len - max_new_tokens - 8
+        input_ids = tokenizer(prompt).input_ids
+        if model.config.is_encoder_decoder:
+            max_src_len = context_len
+        else:  # truncate
+            max_src_len = context_len - max_new_tokens - 1
 
-    input_ids = input_ids[-max_src_len:]
+        input_ids = input_ids[-max_src_len:]
+
+    output_ids = list(input_ids)
+    input_echo_len = len(input_ids)
 
     if model.config.is_encoder_decoder:
         encoder_output = model.encoder(
@@ -169,8 +257,10 @@ def generate_stream(
         )
 
     past_key_values = None
+    sent_interrupt = False
+    first_tokens = None
     for i in range(max_new_tokens):
-        if i == 0:
+        if i == 0:  # prefill
             if model.config.is_encoder_decoder:
                 out = model.decoder(
                     input_ids=start_ids,
@@ -182,22 +272,28 @@ def generate_stream(
                 out = model(torch.as_tensor([input_ids], device=device), use_cache=True)
                 logits = out.logits
             past_key_values = out.past_key_values
-        else:
+        else:  # decoding
             if model.config.is_encoder_decoder:
                 out = model.decoder(
-                    input_ids=torch.as_tensor([[token]], device=device),
+                    input_ids=torch.as_tensor(
+                        [[token] if not sent_interrupt else output_ids], device=device
+                    ),
                     encoder_hidden_states=encoder_output,
                     use_cache=True,
-                    past_key_values=past_key_values,
+                    past_key_values=past_key_values if not sent_interrupt else None,
                 )
+                sent_interrupt = False
 
                 logits = model.lm_head(out[0])
             else:
                 out = model(
-                    input_ids=torch.as_tensor([[token]], device=device),
+                    input_ids=torch.as_tensor(
+                        [[token] if not sent_interrupt else output_ids], device=device
+                    ),
                     use_cache=True,
-                    past_key_values=past_key_values,
+                    past_key_values=past_key_values if not sent_interrupt else None,
                 )
+                sent_interrupt = False
                 logits = out.logits
             past_key_values = out.past_key_values
 
@@ -215,11 +311,24 @@ def generate_stream(
             last_token_logits = last_token_logits.float().to("cpu")
 
         if temperature < 1e-5 or top_p < 1e-8:  # greedy
-            token = int(torch.argmax(last_token_logits))
+            if i == 0:
+                first_token_probs = torch.softmax(last_token_logits, dim=-1)
+                first_token_probs, first_token_indices = torch.topk(first_token_probs, k=10, largest=True, sorted=True)
+                topk_tokens = [tokenizer.decode(int(i)) for i in first_token_indices]
+
+                first_tokens = {}
+                for t, p in zip(topk_tokens, first_token_probs.tolist()):
+                    if t in first_tokens and p < first_tokens[t]:
+                        continue
+                    first_tokens[t] = p
+
+            _, indices = torch.topk(last_token_logits, 2)
+            tokens = [int(index) for index in indices.tolist()]
         else:
             probs = torch.softmax(last_token_logits, dim=-1)
-            token = int(torch.multinomial(probs, num_samples=1))
-
+            indices = torch.multinomial(probs, num_samples=2)
+            tokens = [int(token) for token in indices.tolist()]
+        token = tokens[0]
         output_ids.append(token)
 
         if token in stop_token_ids:
@@ -227,10 +336,11 @@ def generate_stream(
         else:
             stopped = False
 
+        # Yield the output tokens
         if i % stream_interval == 0 or i == max_new_tokens - 1 or stopped:
             if echo:
                 tmp_output_ids = output_ids
-                rfind_start = len_prompt
+                rfind_start = len(prompt) if isinstance(prompt, str) else 0
             else:
                 tmp_output_ids = output_ids[input_echo_len:]
                 rfind_start = 0
@@ -239,13 +349,18 @@ def generate_stream(
                 tmp_output_ids,
                 skip_special_tokens=True,
                 spaces_between_special_tokens=False,
+                clean_up_tokenization_spaces=True,
             )
+
+            partially_stopped = False
             if stop_str:
                 if isinstance(stop_str, str):
                     pos = output.rfind(stop_str, rfind_start)
                     if pos != -1:
                         output = output[:pos]
                         stopped = True
+                    else:
+                        partially_stopped = is_partial_stop(output, stop_str)
                 elif isinstance(stop_str, Iterable):
                     for each_stop in stop_str:
                         pos = output.rfind(each_stop, rfind_start)
@@ -253,23 +368,30 @@ def generate_stream(
                             output = output[:pos]
                             stopped = True
                             break
+                        else:
+                            partially_stopped = is_partial_stop(output, each_stop)
+                            if partially_stopped:
+                                break
                 else:
                     raise ValueError("Invalid stop field type.")
 
-            yield {
-                "text": output,
-                "usage": {
-                    "prompt_tokens": input_echo_len,
-                    "completion_tokens": i,
-                    "total_tokens": input_echo_len + i,
-                },
-                "finish_reason": None,
-            }
+            # Prevent yielding partial stop sequence
+            if not partially_stopped:
+                yield {
+                    "text": output,
+                    "usage": {
+                        "prompt_tokens": input_echo_len,
+                        "completion_tokens": i,
+                        "total_tokens": input_echo_len + i,
+                        "first_tokens": first_tokens
+                    },
+                    "finish_reason": None,
+                }
 
         if stopped:
             break
 
-    # finish stream event, which contains finish reason
+    # Finish stream event, which contains finish reason
     if i == max_new_tokens - 1:
         finish_reason = "length"
     elif stopped:
@@ -283,14 +405,34 @@ def generate_stream(
             "prompt_tokens": input_echo_len,
             "completion_tokens": i,
             "total_tokens": input_echo_len + i,
+            "first_tokens": first_tokens
         },
         "finish_reason": finish_reason,
     }
 
-    # clean
+    # Clean
     del past_key_values, out
     gc.collect()
     torch.cuda.empty_cache()
+
+
+SEQUENCE_LENGTH_KEYS = [
+    "max_sequence_length",
+    "seq_length",
+    "max_position_embeddings",
+    "max_seq_len",
+    "model_max_length",
+]
+
+
+def get_context_length(config):
+    """Get the context length of a model from a huggingface model config."""
+    for key in SEQUENCE_LENGTH_KEYS:
+        if hasattr(config, key):
+            val = getattr(config, key)
+            if val is not None:
+                return val
+    return 2048
 
 
 class ModelServer:
@@ -302,31 +444,36 @@ class ModelServer:
         model_name,
         context_len: Optional[int] = None,
         stream_interval: Optional[int] = 2,
+        prompt_name: Optional[str] = None,
     ):
         self.device = device
         self.model = model
         self.tokenizer = tokenizer
         self.model_name = model_name.lower()
+        self.prompt_name = prompt_name.lower() if prompt_name is not None else None
         self.stream_interval = stream_interval
 
         if context_len is None:
-            if hasattr(self.model.config, "max_sequence_length"):
-                self.context_len = self.model.config.max_sequence_length
-            elif hasattr(self.model.config, "max_position_embeddings"):
-                self.context_len = self.model.config.max_position_embeddings
-            else:
-                self.context_len = 2048
+            self.context_len = get_context_length(self.model.config)
         else:
             self.context_len = context_len
 
-        # generate_stream
-        self.is_chatglm = "chatglm" in self.model_name
-        if self.is_chatglm:
-            self.generate_stream_func = chatglm_generate_stream
-            self.prompt_adapter = None
+        self.construct_prompt = True
+        if "GLMBlock" in getattr(self.model, "_no_split_modules", []):
+            logger.info("Using ChatGLM Model for Chat!")
+            self.generate_stream_func = generate_stream_chatglm
+        elif "BaichuanLayer" in getattr(self.model, "_no_split_modules", []):
+            logger.info("Using Baichuan Model for Chat!")
+            self.construct_prompt = False
+            self.generate_stream_func = generate_stream
+        elif "QWenBlock" in getattr(self.model, "_no_split_modules", []):
+            logger.info("Using Qwen Model for Chat!")
+            self.construct_prompt = False
+            self.generate_stream_func = generate_stream
         else:
             self.generate_stream_func = generate_stream
-            self.prompt_adapter = get_prompt_adapter(self.model_name)
+
+        self.prompt_adapter = get_prompt_adapter(self.model_name, prompt_name=self.prompt_name)
 
     def count_token(self, params):
         prompt = params["prompt"]
@@ -340,7 +487,7 @@ class ModelServer:
         return ret
 
     def generate_prompt(self, messages):
-        return messages if self.is_chatglm else self.prompt_adapter.generate_prompt(messages)
+        return self.prompt_adapter.generate_prompt(messages) if self.construct_prompt else messages
 
     def generate_stream_gate(self, params):
         if isinstance(params["prompt"], list):
@@ -422,7 +569,7 @@ class ModelServer:
         try:
             tokenizer = self.tokenizer
             is_llama = "llama" in str(type(self.model))  # vicuna support batch inference
-            is_chatglm = self.is_chatglm
+            is_chatglm = "chatglm" in self.model_name
             is_t5 = "t5" in str(type(self.model))
             if is_llama:
                 encoding = tokenizer.batch_encode_plus(

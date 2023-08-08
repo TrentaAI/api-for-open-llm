@@ -1,8 +1,16 @@
 import secrets
 import time
+from enum import Enum
 from typing import Literal, Optional, List, Dict, Any, Union
 
 from pydantic import BaseModel, Field
+
+
+class Role(str, Enum):
+    USER = "user"
+    ASSISTANT = "assistant"
+    SYSTEM = "system"
+    FUNCTION = "function"
 
 
 class ErrorResponse(BaseModel):
@@ -45,11 +53,12 @@ class UsageInfo(BaseModel):
     prompt_tokens: int = 0
     total_tokens: int = 0
     completion_tokens: Optional[int] = 0
+    first_tokens: Optional[Any] = None
 
 
 class ChatCompletionRequest(BaseModel):
     model: str
-    messages: List[Dict[str, str]]
+    messages: Union[List[Dict[str, str]], Any]
     temperature: Optional[float] = 0.7
     top_p: Optional[float] = 1.0
     n: Optional[int] = 1
@@ -59,17 +68,26 @@ class ChatCompletionRequest(BaseModel):
     presence_penalty: Optional[float] = 0.0
     frequency_penalty: Optional[float] = 0.0
     user: Optional[str] = None
+    functions: Optional[List[Dict[str, Any]]] = None
+    function_call: Union[str, Dict[str, str]] = "auto"
+
+
+class FunctionCallResponse(BaseModel):
+    name: str
+    arguments: str
+    thought: str = None
 
 
 class ChatMessage(BaseModel):
     role: str
-    content: str
+    content: str = None
+    function_call: Optional[FunctionCallResponse] = None
 
 
 class ChatCompletionResponseChoice(BaseModel):
     index: int
     message: ChatMessage
-    finish_reason: Optional[Literal["stop", "length"]] = None
+    finish_reason: Optional[Literal["stop", "length", "function_call"]] = None
 
 
 class ChatCompletionResponse(BaseModel):
