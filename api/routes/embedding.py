@@ -1,9 +1,12 @@
+import base64
+
 import numpy as np
 import tiktoken
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
 from api.config import config
 from api.models import EMBEDDED_MODEL
+from api.routes.utils import check_api_key
 from api.utils.protocol import (
     UsageInfo,
     EmbeddingsResponse,
@@ -13,8 +16,8 @@ from api.utils.protocol import (
 embedding_router = APIRouter()
 
 
-@embedding_router.post("/embeddings")
-@embedding_router.post("/engines/{model_name}/embeddings")
+@embedding_router.post("/embeddings", dependencies=[Depends(check_api_key)])
+@embedding_router.post("/engines/{model_name}/embeddings", dependencies=[Depends(check_api_key)])
 async def create_embeddings(request: EmbeddingsRequest, model_name: str = None):
     """Creates embeddings for the text"""
     if request.model is None:
@@ -55,7 +58,11 @@ async def create_embeddings(request: EmbeddingsRequest, model_name: str = None):
             zeros = np.zeros((bs, config.EMBEDDING_SIZE - dim))
             vecs = np.c_[vecs, zeros]
 
-        vecs = vecs.tolist()
+        if request.encoding_format == "base64":
+            vecs = [base64.b64encode(v.tobytes()).decode("utf-8") for v in vecs]
+        else:
+            vecs = vecs.tolist()
+
         data += [
             {
                 "object": "embedding",

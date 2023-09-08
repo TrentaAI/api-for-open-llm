@@ -1,6 +1,7 @@
 import os
-from loguru import logger
+
 import dotenv
+from loguru import logger
 
 dotenv.load_dotenv()
 
@@ -8,34 +9,40 @@ dotenv.load_dotenv()
 DEFAULTS = {
     'HOST': '0.0.0.0',
     'PORT': 8000,
+
+    # support for model
     'MODEL_NAME': '',
     'MODEL_PATH': '',
     'ADAPTER_MODEL_PATH': '',
 
+    # support for device
     'DEVICE': 'cuda',
     'DEVICE_MAP': "",
     'GPUS': '',
     'NUM_GPUs': 1,
 
+    # support for embeddings
     'EMBEDDING_NAME': '',
     'EMBEDDING_SIZE': '',
     'EMBEDDING_DEVICE': 'cuda',
 
+    # support for quantize
     'QUANTIZE': 16,
     'LOAD_IN_8BIT': 'False',
     'LOAD_IN_4BIT': 'False',
     'USING_PTUNING_V2': 'False',
 
+    # support for model input
     'CONTEXT_LEN': '',
     'STREAM_INTERVERL': 2,
     'PROMPT_NAME': '',
 
     'PATCH_TYPE': '',
-    'TRAINING_LENGTH': 4096,
-    'WINDOW_SIZE': 512,
+    'ALPHA': 'auto',
 
     'API_PREFIX': '/v1',
 
+    # support for vllm
     'USE_VLLM': 'False',
     'TRUST_REMOTE_CODE': "False",
     'TOKENIZE_MODE': "auto",
@@ -44,6 +51,14 @@ DEFAULTS = {
     "GPU_MEMORY_UTILIZATION": 0.9,
     "MAX_NUM_BATCHED_TOKENS": 5120,
     "MAX_NUM_SEQS": 256,
+
+    # support for transformers.TextIteratorStreamer
+    'USE_STREAMER_V2': 'False',
+
+    # support for api key check
+    'API_KEYS': '',
+
+    'ACTIVATE_INFERENCE': 'True',
 }
 
 
@@ -85,8 +100,7 @@ class Config:
         self.PROMPT_NAME = get_env('PROMPT_NAME') if get_env('PROMPT_NAME') else None
 
         self.PATCH_TYPE = get_env('PATCH_TYPE') if get_env('PATCH_TYPE') else None
-        self.TRAINING_LENGTH = int(get_env('TRAINING_LENGTH'))
-        self.WINDOW_SIZE = int(get_env('WINDOW_SIZE'))
+        self.ALPHA = get_env('ALPHA')
 
         self.API_PREFIX = get_env('API_PREFIX')
 
@@ -98,6 +112,12 @@ class Config:
         self.GPU_MEMORY_UTILIZATION = float(get_env('GPU_MEMORY_UTILIZATION'))
         self.MAX_NUM_BATCHED_TOKENS = int(get_env('MAX_NUM_BATCHED_TOKENS'))
         self.MAX_NUM_SEQS = int(get_env('MAX_NUM_SEQS'))
+
+        self.USE_STREAMER_V2 = get_bool_env('USE_STREAMER_V2')
+
+        self.API_KEYS = get_env('API_KEYS').split(',') if get_env('API_KEYS') else None
+
+        self.ACTIVATE_INFERENCE = get_bool_env('ACTIVATE_INFERENCE')
 
 
 config = Config()

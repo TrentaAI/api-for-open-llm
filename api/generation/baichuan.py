@@ -19,9 +19,9 @@ def build_baichuan_chat_input(
     max_history_tokens = max_input_tokens - len(system_tokens)
 
     history_tokens = []
-    for round in rounds[::-1]:
+    for r in rounds[::-1]:
         round_tokens = []
-        for message in round:
+        for message in r:
             if message.role == Role.USER:
                 round_tokens.append(195)
             else:
@@ -41,5 +41,5 @@ def build_baichuan_chat_input(
     return input_tokens[-max_input_tokens:]  # truncate left
 
 
-def check_is_baichuan(model):
+def check_is_baichuan(model) -> bool:
     return "BaichuanLayer" in getattr(model, "_no_split_modules", [])

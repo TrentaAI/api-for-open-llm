@@ -1,5 +1,4 @@
-from typing import List
-from typing import Tuple
+from typing import List, Tuple
 
 from transformers.generation.logits_process import (
     LogitsProcessorList,
@@ -14,17 +13,17 @@ from api.utils.protocol import ChatMessage, Role
 
 def parse_messages(messages: List[ChatMessage], split_role=Role.USER) -> Tuple[str, List[List[ChatMessage]]]:
     system, rounds = "", []
-    round = []
+    r = []
     for i, message in enumerate(messages):
         if message.role == Role.SYSTEM:
             system = message.content
             continue
-        if message.role == split_role and round:
-            rounds.append(round)
-            round = []
-        round.append(message)
-    if round:
-        rounds.append(round)
+        if message.role == split_role and r:
+            rounds.append(r)
+            r = []
+        r.append(message)
+    if r:
+        rounds.append(r)
     return system, rounds
 
 
@@ -54,7 +53,7 @@ def is_partial_stop(output: str, stop_str: str):
 
 # Models don't use the same configuration key for determining the maximum
 # sequence length.  Store them here so we can sanely check them.
-# NOTE: The ordering here is important.  Some models have two of these and we
+# NOTE: The ordering here is important.  Some models have two of these, and we
 # have a preference for which value gets used.
 SEQUENCE_LENGTH_KEYS = [
     "max_sequence_length",
@@ -65,7 +64,7 @@ SEQUENCE_LENGTH_KEYS = [
 ]
 
 
-def get_context_length(config):
+def get_context_length(config) -> int:
     """Get the context length of a model from a huggingface model config."""
     rope_scaling = getattr(config, "rope_scaling", None)
     if rope_scaling:
@@ -78,3 +77,27 @@ def get_context_length(config):
         if val is not None:
             return int(rope_scaling_factor * val)
     return 2048
+
+
+def apply_stopping_strings(reply, stop_strings) -> Tuple[str, bool]:
+    stop_found = False
+    for string in stop_strings:
+        idx = reply.find(string)
+        if idx != -1:
+            reply = reply[:idx]
+            stop_found = True
+            break
+
+    if not stop_found:
+        # If something like "\nYo" is generated just before "\nYou: is completed, trim it
+        for string in stop_strings:
+            for j in range(len(string) - 1, 0, -1):
+                if reply[-j:] == string[:j]:
+                    reply = reply[:-j]
+                    break
+            else:
+                continue
+
+            break
+
+    return reply, stop_found

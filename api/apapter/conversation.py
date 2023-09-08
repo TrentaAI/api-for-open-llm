@@ -18,10 +18,18 @@ class BasePromptAdapter:
     assistant_prompt: str = "{}\n"
     stop = None
 
-    def match(self, model_name):
+    def match(self, model_name) -> bool:
         return True
 
     def generate_prompt(self, messages: List[ChatMessage]) -> str:
+        """Covert messages into a prompt string.
+
+        Args:
+            messages (List[ChatMessage]): The conversation message in previous runs.
+
+        Returns:
+            string: formated prompt.
+        """
         prompt = self.system_prompt
         user_content = []
         for message in messages:
@@ -65,13 +73,21 @@ def get_prompt_adapter(model_name: str, prompt_name: Optional[str] = None):
 
 
 class ChatGLMPromptAdapter(BasePromptAdapter):
+    """ formated prompt likes:
+        [Round 0]
+        问：{query0}
+        答：{response0}
+        [Round 1]
+        问：{query1}
+        答：
+    """
 
     name = "chatglm"
     system_prompt = ""
     user_prompt = "问：{}\n答："
     assistant_prompt = "{}\n"
 
-    def match(self, model_name):
+    def match(self, model_name) -> bool:
         return model_name == "chatglm"
 
     def generate_prompt(self, messages: List[ChatMessage]) -> str:
@@ -99,13 +115,26 @@ class ChatGLMPromptAdapter(BasePromptAdapter):
 
 
 class ChatGLM2PromptAdapter(BasePromptAdapter):
+    """ formated prompt likes:
+        [Round 1]
+
+        问：{query0}
+
+        答：{response0}
+
+        [Round 2]
+
+        问：{query1}
+
+        答：
+    """
 
     name = "chatglm2"
     system_prompt = ""
     user_prompt = "问：{}\n\n答："
     assistant_prompt = "{}\n\n"
 
-    def match(self, model_name):
+    def match(self, model_name) -> bool:
         return model_name == "chatglm2"
 
     def generate_prompt(self, messages: List[ChatMessage]) -> str:
@@ -133,6 +162,12 @@ class ChatGLM2PromptAdapter(BasePromptAdapter):
 
 
 class MossPromptAdapter(BasePromptAdapter):
+    """ formated prompt likes:
+        <|Human|>: {query0}<eoh>
+        <|MOSS|>: {response0}
+        <|Human|>: {query1}<eoh>
+        <|MOSS|>:
+    """
 
     name = "moss"
     system_prompt = """You are an AI assistant whose name is MOSS.
@@ -151,47 +186,72 @@ Capabilities and tools that MOSS can possess.
         "strings": ["<|Human|>", "<|MOSS|>"],
     }
 
-    def match(self, model_name):
+    def match(self, model_name) -> bool:
         return "moss" in model_name
 
 
 class PhoenixPromptAdapter(BasePromptAdapter):
+    """ formated prompt likes:
+        Human: <s>{query0}</s>Assistant: <s>{response0}</s>
+        Human: <s>{query1}</s>Assistant: <s>
+    """
 
     name = "phoenix"
     system_prompt = "A chat between a curious human and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the human's questions.\n\n"
     user_prompt = "Human: <s>{}</s>Assistant: <s>"
     assistant_prompt = "{}</s>"
 
-    def match(self, model_name):
+    def match(self, model_name) -> bool:
         return "phoenix" in model_name
 
 
 class AlpacaPromptAdapter(BasePromptAdapter):
+    """ formated prompt likes:
+        ### Instruction:
+        {query0}
+
+        ### Response:
+        {response0}
+
+        ### Instruction:
+        {query1}
+
+        ### Response:
+    """
 
     name = "alpaca"
     system_prompt = "Below is an instruction that describes a task. Write a response that appropriately completes the request.\n\n"
-    user_prompt = "### Instruction:\n\n{}\n\n### Response:\n\n"
+    user_prompt = "### Instruction:\n{}\n\n### Response:\n"
     assistant_prompt = "{}\n\n"
     stop = {
         "strings": ["### Instruction", "### Response"],
     }
 
-    def match(self, model_name):
+    def match(self, model_name) -> bool:
         return "alpaca" in model_name or "tiger" in model_name or "anima" in model_name
 
 
 class FireflyPromptAdapter(BasePromptAdapter):
+    """ formated prompt likes:
+        <s>{query0}</s>{response0}</s><s>{query1}</s>
+    """
 
     name = "firefly"
     system_prompt = ""
     user_prompt = "<s>{}</s>"
     assistant_prompt = "{}</s>"
 
-    def match(self, model_name):
+    def match(self, model_name) -> bool:
         return "firefly" in model_name or "baichuan-7b" in model_name
 
 
 class BaizePromptAdapter(BasePromptAdapter):
+    """ formated prompt likes:
+        [|Human|]{query0}
+        [|AI|]{response0}
+        [|Human|]{query1}
+        [|AI|]
+    """
 
     name = "baize"
     system_prompt = "The following is a conversation between a human and an AI assistant named Baize (named after a mythical creature in Chinese folklore). " \
@@ -205,22 +265,37 @@ class BaizePromptAdapter(BasePromptAdapter):
         "strings": ["[|Human|]", "[|AI|]"],
     }
 
-    def match(self, model_name):
+    def match(self, model_name) -> bool:
         return "baize" in model_name
 
 
 class BellePromptAdapter(BasePromptAdapter):
+    """ formated prompt likes:
+        Human: {query0}
+
+        Assistant: {response0}
+
+        Human: {query1}
+
+        Assistant:
+    """
 
     name = "belle"
     system_prompt = ""
     user_prompt = "Human: {}\n\nAssistant: "
     assistant_prompt = "{}\n\n"
 
-    def match(self, model_name):
+    def match(self, model_name) -> bool:
         return "belle" in model_name
 
 
 class GuanacoPromptAdapter(BasePromptAdapter):
+    """ formated prompt likes:
+        ### Human: {query0}
+        ### Assistant: {response0}
+        ### Human: {query1}
+        ### Assistant:
+    """
 
     name = "guanaco"
     system_prompt = "A chat between a curious human and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions.\n"
@@ -230,11 +305,17 @@ class GuanacoPromptAdapter(BasePromptAdapter):
         "strings": ["### Human", "### Assistant", "##"],
     }
 
-    def match(self, model_name):
+    def match(self, model_name) -> bool:
         return "guanaco" in model_name
 
 
 class YuLanChatPromptAdapter(BasePromptAdapter):
+    """ formated prompt likes:
+        [|Human|]{query0}
+        [|AI|]{response0}
+        [|Human|]{query1}
+        [|AI|]
+    """
 
     name = "yulan"
     system_prompt = "The following is a conversation between a human and an AI assistant namely YuLan, developed by GSAI, Renmin University of China. The AI assistant gives helpful, detailed, and polite answers to the user's questions.\n\n"
@@ -244,11 +325,18 @@ class YuLanChatPromptAdapter(BasePromptAdapter):
         "strings": ["[|Human|]", "[|AI|]"],
     }
 
-    def match(self, model_name):
+    def match(self, model_name) -> bool:
         return "yulan" in model_name
 
 
 class OpenBuddyPromptAdapter(BasePromptAdapter):
+    """ formated prompt likes:
+        User: {query0}
+        Assistant: {response0}
+
+        User: {query1}
+        Assistant:
+    """
 
     name = "openbuddy"
     system_prompt = """Consider a conversation between User (a human) and Assistant (named Buddy).
@@ -264,26 +352,36 @@ Buddy strictly refuses to discuss harmful, political, NSFW, illegal, abusive, of
     user_prompt = "User: {}\nAssistant: "
     assistant_prompt = "{}\n\n"
 
-    def match(self, model_name):
+    def match(self, model_name) -> bool:
         return "openbuddy" in model_name
 
 
 class InternLMPromptAdapter(BasePromptAdapter):
+    """ formated prompt likes:
+        <s><|User|>:{query0}<eoh>
+        <|Bot|>:{response0}<eoa>
+        <s><|User|>:{query1}<eoh>
+        <|Bot|>:
+    """
 
     name = "internlm"
     system_prompt = ""
     user_prompt = "<s><|User|>:{}<eoh>\n<|Bot|>:"
     assistant_prompt = "{}<eoa>\n"
     stop = {
-        "strings": ["<|User|>", "<|Bot|>", "<eoa>"],
+        "strings": ["</s>", "<eoa>"],
     }
 
-    def match(self, model_name):
+    def match(self, model_name) -> bool:
         return "internlm" in model_name
 
 
 class BaiChuanPromptAdapter(BasePromptAdapter):
-    """ https://github.com/lm-sys/FastChat/blob/main/fastchat/conversation.py """
+    """ https://github.com/lm-sys/FastChat/blob/main/fastchat/conversation.py
+
+    formated prompt likes:
+        <reserved_102>{query0}<reserved_103>{response0}<reserved_102>{query1}<reserved_103>
+    """
 
     name = "baichuan"
     system_prompt = ""
@@ -294,12 +392,42 @@ class BaiChuanPromptAdapter(BasePromptAdapter):
         "token_ids": [195, 196],
     }
 
-    def match(self, model_name):
+    def match(self, model_name) -> bool:
         return "baichuan-13b" in model_name
 
 
+class BaiChuan2PromptAdapter(BasePromptAdapter):
+    """ https://huggingface.co/baichuan-inc/Baichuan2-13B-Chat
+
+    formated prompt likes:
+        <reserved_106>{query0}<reserved_107>{response0}<reserved_106>{query1}<reserved_107>
+    """
+
+    name = "baichuan2"
+    system_prompt = ""
+    user_prompt = "<reserved_106>{}<reserved_107>"
+    assistant_prompt = "{}"
+    stop = {
+        "strings": ["<reserved_106>", "<reserved_107>"],
+        "token_ids": [195, 196],
+    }
+
+    def match(self, model_name) -> bool:
+        return "baichuan2" in model_name
+
+
 class StarChatPromptAdapter(BasePromptAdapter):
-    """ https://huggingface.co/HuggingFaceH4/starchat-beta """
+    """ https://huggingface.co/HuggingFaceH4/starchat-beta
+
+    formated prompt likes:
+        <|user|>
+        {query0}<|end|>
+        <|assistant|>
+        {response0}<|end|>
+        <|user|>
+        {query1}<|end|>
+        <|assistant|>
+    """
 
     name = "starchat"
     system_prompt = "<|system|>\n{}<|end|>\n"
@@ -307,9 +435,10 @@ class StarChatPromptAdapter(BasePromptAdapter):
     assistant_prompt = "<|assistant|>\n{}<|end|>\n"
     stop = {
         "token_ids": [49152, 49153, 49154, 49155],
+        "strings": ["<|end|>"],
     }
 
-    def match(self, model_name):
+    def match(self, model_name) -> bool:
         return "starchat" in model_name or "starcode" in model_name
 
     def generate_prompt(self, messages: List[ChatMessage]) -> str:
@@ -323,14 +452,21 @@ class StarChatPromptAdapter(BasePromptAdapter):
             else:
                 prompt += self.assistant_prompt.format(content)
 
-        prompt += "<|assistant|>\n"
+        if messages[-1].role == Role.USER:
+            prompt += "<|assistant|>\n"
 
         return prompt
 
 
 class AquilaChatPromptAdapter(BasePromptAdapter):
-    """ https://github.com/FlagAI-Open/FlagAI/blob/6f5d412558d73d5d12b8b55d56f51942f80252c1/examples/Aquila/Aquila-chat/cyg_conversation.py """
+    """ https://github.com/FlagAI-Open/FlagAI/blob/6f5d412558d73d5d12b8b55d56f51942f80252c1/examples/Aquila/Aquila-chat/cyg_conversation.py
 
+    formated prompt likes:
+        Human: {query0}###
+        Assistant: {response0}###
+        Human: {query1}###
+        Assistant:
+    """
     name = "aquila"
     system_prompt = "System: {}###"
     user_prompt = "Human: {}###"
@@ -339,7 +475,7 @@ class AquilaChatPromptAdapter(BasePromptAdapter):
         "strings": ["###", "[UNK]", "</s>"],
     }
 
-    def match(self, model_name):
+    def match(self, model_name) -> bool:
         return "aquila" in model_name
 
     def generate_prompt(self, messages: List[ChatMessage]) -> str:
@@ -353,13 +489,18 @@ class AquilaChatPromptAdapter(BasePromptAdapter):
             else:
                 prompt += self.assistant_prompt.format(content)
 
-        prompt += "Assistant: "
+        if messages[-1].role == Role.USER:
+            prompt += "Assistant: "
 
         return prompt
 
 
 class Llama2ChatPromptAdapter(BasePromptAdapter):
-    """ https://github.com/facebookresearch/llama/blob/main/llama/generation.py """
+    """ https://github.com/facebookresearch/llama/blob/main/llama/generation.py
+
+    formated prompt likes:
+        <s>[INST] {query0} [/INST] {response0} </s><s>[INST] {query1} [/INST]
+    """
 
     name = "llama2"
     system_prompt = "[INST] <<SYS>>\n{}\n<</SYS>>\n\n"
@@ -369,8 +510,8 @@ class Llama2ChatPromptAdapter(BasePromptAdapter):
         "strings": ["[INST]", "[/INST]"],
     }
 
-    def match(self, model_name):
-        return "llama2" in model_name
+    def match(self, model_name) -> bool:
+        return "llama2" in model_name or "code-llama" in model_name
 
     def generate_prompt(self, messages: List[ChatMessage]) -> str:
         prompt = """You are a helpful, respectful and honest assistant. Always answer as helpfully as possible, while being safe.  Your answers should not include any harmful, unethical, racist, sexist, toxic, dangerous, or illegal content. Please ensure that your responses are socially unbiased and positive in nature.
@@ -387,13 +528,24 @@ If a question does not make any sense, or is not factually coherent, explain why
                 else:
                     prompt += self.assistant_prompt.format(content)
 
-        prompt += "[/INST] "
+        if messages[-1].role == Role.USER:
+            prompt += "[/INST] "
 
         return prompt
 
 
 class QwenPromptAdapter(BasePromptAdapter):
-    """ https://huggingface.co/Qwen/Qwen-7B-Chat """
+    """ https://huggingface.co/Qwen/Qwen-7B-Chat
+
+     formated prompt likes:
+        <|im_start|>user
+        {query0}<|im_end|>
+        <|im_start|>assistant
+        {response0}<|im_end|>
+        <|im_start|>user
+        {query0}<|im_end|>
+        <|im_start|>assistant
+    """
 
     name = "chatml"
     system_prompt = "<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n"
@@ -403,31 +555,49 @@ class QwenPromptAdapter(BasePromptAdapter):
         "strings": ["<|im_end|>"],
     }
 
-    def match(self, model_name):
+    def match(self, model_name) -> bool:
         return "qwen" in model_name
 
 
 class OctopackPromptAdapter(BasePromptAdapter):
-    """ https://huggingface.co/codeparrot/starcoder-self-instruct """
+    """ https://huggingface.co/codeparrot/starcoder-self-instruct
+
+    formated prompt likes:
+        Question:{query0}
+
+        Answer:{response0}
+
+        Question:{query1}
+
+        Answer:
+    """
 
     name = "octopack"
     system_prompt = ""
     user_prompt = "Question:{}\n\nAnswer:"
     assistant_prompt = "{}\n\n"
 
-    def match(self, model_name):
+    def match(self, model_name) -> bool:
         return "starcoder-self-instruct" in model_name
 
 
 class XversePromptAdapter(BasePromptAdapter):
-    """ https://huggingface.co/xverse/XVERSE-13B-Chat """
+    """ https://huggingface.co/xverse/XVERSE-13B-Chat
+
+    formated prompt likes:
+        Human: {query0}
+
+        Assistant: {response0}<|endoftext|>Human: {query1}
+
+        Assistant:
+    """
 
     name = "xverse"
     system_prompt = ""
     user_prompt = "Human: {}\n\nAssistant: "
     assistant_prompt = "{}<|endoftext|>"
 
-    def match(self, model_name):
+    def match(self, model_name) -> bool:
         return "xverse" in model_name
 
 
@@ -444,6 +614,7 @@ register_prompt_adapter(YuLanChatPromptAdapter)
 register_prompt_adapter(OpenBuddyPromptAdapter)
 register_prompt_adapter(InternLMPromptAdapter)
 register_prompt_adapter(BaiChuanPromptAdapter)
+register_prompt_adapter(BaiChuan2PromptAdapter)
 register_prompt_adapter(StarChatPromptAdapter)
 register_prompt_adapter(AquilaChatPromptAdapter)
 register_prompt_adapter(Llama2ChatPromptAdapter)

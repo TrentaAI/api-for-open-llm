@@ -50,7 +50,14 @@ class BaseModelAdapter:
         num_gpus = kwargs.get("num_gpus", 1)
         if device == "cuda":
             if "torch_dtype" not in config_kwargs:
-                config_kwargs["torch_dtype"] = torch.float16
+                dtype = kwargs.get("dtype", "half")
+                if dtype == "half":
+                    config_kwargs["torch_dtype"] = torch.float16
+                elif dtype == "bfloat16":
+                    config_kwargs["torch_dtype"] = torch.bfloat16
+                else:
+                    config_kwargs["torch_dtype"] = torch.float32
+
             if num_gpus != 1:
                 config_kwargs["device_map"] = "auto"
                 # model_kwargs["device_map"] = "sequential"  # This is important for not the same VRAM sizes
@@ -441,6 +448,23 @@ class XverseModelAdapter(BaseModelAdapter):
         return "xverse/XVERSE-13B-Chat"
 
 
+class CodeLlamaModelAdapter(LlamaModelAdapter):
+    """ https://github.com/project-baize/baize-chatbot """
+
+    model_names = ["code-llama"]
+
+    @property
+    def tokenizer_class(self):
+        require_version("transformers>=4.33.1", "To fix: pip install transformers>=4.33.1")
+        from transformers import CodeLlamaTokenizer
+
+        return CodeLlamaTokenizer
+
+    @property
+    def default_model_name_or_path(self):
+        return "codellama/CodeLlama-7b-Instruct-hf"
+
+
 register_model_adapter(ChatglmModelAdapter)
 register_model_adapter(LlamaModelAdapter)
 register_model_adapter(MossModelAdapter)
@@ -455,6 +479,7 @@ register_model_adapter(InternLMModelAdapter)
 register_model_adapter(AquilaModelAdapter)
 register_model_adapter(QwenModelAdapter)
 register_model_adapter(XverseModelAdapter)
+register_model_adapter(CodeLlamaModelAdapter)
 
 # After all adapters, try the default base adapter.
 register_model_adapter(BaseModelAdapter)

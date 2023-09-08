@@ -30,9 +30,9 @@ def build_qwen_chat_input(
     max_history_tokens = max_input_tokens - len(system_tokens)
 
     history_tokens = []
-    for round in rounds[::-1]:
+    for r in rounds[::-1]:
         round_tokens = []
-        for message in round:
+        for message in r:
             if round_tokens:
                 round_tokens += nl_tokens
 
@@ -58,5 +58,5 @@ def build_qwen_chat_input(
     return input_tokens[-max_input_tokens:]  # truncate left
 
 
-def check_is_qwen(model):
+def check_is_qwen(model) -> bool:
     return "QWenBlock" in getattr(model, "_no_split_modules", [])

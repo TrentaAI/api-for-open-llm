@@ -2,10 +2,9 @@ import time
 from http import HTTPStatus
 from typing import AsyncGenerator, Optional
 
-from fastapi import APIRouter
-from fastapi import BackgroundTasks, Request
+from fastapi import APIRouter, Depends, BackgroundTasks, Request
 from fastapi.responses import StreamingResponse
-from vllm.logger import init_logger
+from loguru import logger
 from vllm.outputs import RequestOutput
 from vllm.sampling_params import SamplingParams
 from vllm.utils import random_uuid
@@ -18,6 +17,7 @@ from api.apapter.react import (
 )
 from api.config import config
 from api.models import VLLM_ENGINE
+from api.routes.utils import check_api_key
 from api.utils.protocol import (
     ChatCompletionRequest,
     ChatCompletionResponse,
@@ -31,12 +31,11 @@ from api.utils.protocol import (
 )
 from api.vllm_routes.utils import create_error_response, get_gen_prompt, get_model_inputs
 
-logger = init_logger(__name__)
 chat_router = APIRouter(prefix="/chat")
 
 
-@chat_router.post("/completions")
-async def create_chat_completion(raw_request: Request):
+@chat_router.post("/completions", dependencies=[Depends(check_api_key)])
+async def create_chat_completion(request: ChatCompletionRequest, raw_request: Request):
     """Completion API similar to OpenAI's API.
 
     See  https://platform.openai.com/docs/api-reference/chat/create
@@ -46,12 +45,17 @@ async def create_chat_completion(raw_request: Request):
         - function_call (Users should implement this by themselves)
         - logit_bias (to be supported by vLLM engine)
     """
-    request = ChatCompletionRequest(**await raw_request.json())
-    logger.info(f"Received chat completion request: {request}")
+    logger.info(f"Received chat messages: {request.messages}")
+
+    if len(request.messages) < 1 or request.messages[-1].role != Role.USER:
+        return create_error_response(
+            HTTPStatus.BAD_REQUEST,
+            "Invalid request: messages is empty"
+        )
 
     with_function_call = check_function_call(request.messages, functions=request.functions)
     if with_function_call and "qwen" not in config.MODEL_NAME.lower():
-        create_error_response(
+        return create_error_response(
             HTTPStatus.BAD_REQUEST,
             "Invalid request format: functions only supported by Qwen-7B-Chat",
         )
@@ -75,27 +79,27 @@ async def create_chat_completion(raw_request: Request):
     if error_check_ret is not None:
         return error_check_ret
 
+    # stop settings
+    stop = []
+    if VLLM_ENGINE.prompt_adapter.stop is not None:
+        stop = VLLM_ENGINE.prompt_adapter.stop.get("strings", [])
+
+    request.stop = request.stop or []
+    if isinstance(request.stop, str):
+        request.stop = [request.stop]
+    request.stop = list(set(stop + request.stop))
+
     model_name = request.model
     request_id = f"cmpl-{random_uuid()}"
     created_time = int(time.time())
     try:
-        stop = []
-        if VLLM_ENGINE.prompt_adapter.stop is not None:
-            if "strings" in VLLM_ENGINE.prompt_adapter.stop:
-                stop = VLLM_ENGINE.prompt_adapter.stop["strings"]
-
-        if request.stop is not None:
-            if isinstance(request.stop, str):
-                request.stop = [request.stop]
-            stop.extend(request.stop)
-
         sampling_params = SamplingParams(
             n=request.n,
             presence_penalty=request.presence_penalty,
             frequency_penalty=request.frequency_penalty,
             temperature=request.temperature,
             top_p=request.top_p,
-            stop=list(set(stop)),
+            stop=request.stop,
             max_tokens=request.max_tokens,
             best_of=request.best_of,
             top_k=request.top_k,
@@ -185,7 +189,7 @@ async def create_chat_completion(raw_request: Request):
                             found_action_name = True
                             finish_reason = "function_call"
                 else:
-                    msgs = [DeltaMessage(content=delta_text)]
+                    msgs = [DeltaMessage(content=delta_text, role=Role.ASSISTANT)]
                     finish_reason = output.finish_reason
 
                 for m in msgs:
@@ -195,7 +199,7 @@ async def create_chat_completion(raw_request: Request):
                 if output.finish_reason is not None:
                     response_json = create_stream_response_json(
                         index=i,
-                        delta=DeltaMessage(content=""),
+                        delta=DeltaMessage(content="", role=Role.ASSISTANT),
                         finish_reason=output.finish_reason,
                     )
                     yield f"data: {response_json}\n\n"

@@ -1,27 +1,44 @@
 import asyncio
 
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from sentence_transformers import SentenceTransformer
 
 from api.apapter import get_prompt_adapter
 from api.config import config
-from api.generation import ModelServer
 
 
-def get_embedding_model():
+def create_app():
+    """ create fastapi app server """
+    app = FastAPI()
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+    return app
+
+
+def create_embedding_model() -> SentenceTransformer:
+    """ get embedding model from sentence-transformers. """
     return SentenceTransformer(config.EMBEDDING_NAME, device=config.EMBEDDING_DEVICE)
 
 
-def get_generate_model():
+def create_generate_model():
+    """ get generate model for chat or completion. """
+    from api.generation import ModelServer
     from api.apapter.model import load_model
 
-    if config.PATCH_TYPE == "rerope":
-        from api.utils.patches import apply_rerope_patch
+    if config.PATCH_TYPE == "attention":
+        from api.utils.patches import apply_attention_patch
 
-        apply_rerope_patch(config.TRAINING_LENGTH, config.WINDOW_SIZE)
-    elif config.PATCH_TYPE == "ntk":
+        apply_attention_patch(use_memory_efficient_attention=True)
+    if config.PATCH_TYPE == "ntk":
         from api.utils.patches import apply_ntk_scaling_patch
 
-        apply_ntk_scaling_patch(config.TRAINING_LENGTH)
+        apply_ntk_scaling_patch(config.ALPHA)
 
     model, tokenizer = load_model(
         config.MODEL_NAME,
@@ -34,6 +51,7 @@ def get_generate_model():
         load_in_8bit=config.LOAD_IN_8BIT,
         load_in_4bit=config.LOAD_IN_4BIT,
         use_ptuning_v2=config.USING_PTUNING_V2,
+        dtype=config.DTYPE,
     )
 
     return ModelServer(
@@ -44,10 +62,12 @@ def get_generate_model():
         context_len=config.CONTEXT_LEN,
         stream_interval=config.STREAM_INTERVERL,
         prompt_name=config.PROMPT_NAME,
+        use_streamer_v2=config.USE_STREAMER_V2,
     )
 
 
-def get_context_len(model_config):
+def get_context_len(model_config) -> int:
+    """ fix for model max length. """
     if "qwen" in config.MODEL_NAME.lower():
         max_model_len = config.CONTEXT_LEN or 8192
     else:
@@ -55,7 +75,8 @@ def get_context_len(model_config):
     return max_model_len
 
 
-def get_vllm_engine():
+def create_vllm_engine():
+    """ get vllm generate engine for chat or completion. """
     try:
         from vllm.engine.arg_utils import AsyncEngineArgs
         from vllm.engine.async_llm_engine import AsyncLLMEngine
@@ -76,18 +97,21 @@ def get_vllm_engine():
     engine = AsyncLLMEngine.from_engine_args(engine_args)
 
     # A separate tokenizer to map token IDs to strings.
-    engine.encode_tokenizer = get_tokenizer(
-        engine_args.tokenizer,
-        tokenizer_mode=engine_args.tokenizer_mode,
-        trust_remote_code=True,
-    )
+    if "code-llama" in config.MODEL_NAME.lower():
+        from transformers.utils.versions import require_version
 
-    # fix llama config
-    model_type = getattr(engine.engine.model_config.hf_config, "model_type", "")
-    if model_type == "llama":
-        engine.engine.model_config.hf_config.eos_token_id = engine.encode_tokenizer.eos_token_id
-        engine.engine.model_config.hf_config.pad_token_id = engine.encode_tokenizer.pad_token_id
+        require_version("transformers>=4.33.1", "To fix: pip install transformers>=4.33.1")
+        from transformers import CodeLlamaTokenizer
 
+        engine.engine.tokenizer = CodeLlamaTokenizer.from_pretrained(engine_args.tokenizer)
+    else:
+        engine.engine.tokenizer = get_tokenizer(
+            engine_args.tokenizer,
+            tokenizer_mode=engine_args.tokenizer_mode,
+            trust_remote_code=True,
+        )
+
+    # prompt adapter for constructing model inputs
     engine.prompt_adapter = get_prompt_adapter(
         config.MODEL_NAME.lower(),
         prompt_name=config.PROMPT_NAME.lower() if config.PROMPT_NAME else None
@@ -100,7 +124,17 @@ def get_vllm_engine():
     return engine
 
 
-EMBEDDED_MODEL = get_embedding_model() if config.EMBEDDING_NAME else None  # model for embedding
-GENERATE_MDDEL = get_generate_model() if not config.USE_VLLM else None  # model for transformers generate
-VLLM_ENGINE = get_vllm_engine() if config.USE_VLLM else None   # model for vllm generate
+# fastapi app
+app = create_app()
+
+# model for embedding
+EMBEDDED_MODEL = create_embedding_model() if (config.EMBEDDING_NAME and config.ACTIVATE_INFERENCE) else None
+
+# model for transformers generate
+GENERATE_MDDEL = create_generate_model() if (not config.USE_VLLM and config.ACTIVATE_INFERENCE) else None
+
+# model for vllm generate
+VLLM_ENGINE = create_vllm_engine() if (config.USE_VLLM and config.ACTIVATE_INFERENCE) else None
+
+# model names for special processing
 EXCLUDE_MODELS = ["baichuan-13b", "qwen"]

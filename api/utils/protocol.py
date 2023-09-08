@@ -53,7 +53,6 @@ class UsageInfo(BaseModel):
     prompt_tokens: int = 0
     total_tokens: int = 0
     completion_tokens: Optional[int] = 0
-    first_tokens: Optional[Any] = None
 
 
 class ChatFunction(BaseModel):
@@ -90,6 +89,10 @@ class ChatCompletionRequest(BaseModel):
     user: Optional[str] = None
     functions: Optional[List[ChatFunction]] = None
     function_call: Union[str, Dict[str, str]] = "auto"
+
+    # Additional parameters support for stop generation
+    stop_token_ids: Optional[List[int]] = None
+    repetition_penalty: Optional[float] = 1.1
 
     # Additional parameters supported by vLLM
     best_of: Optional[int] = None
@@ -138,6 +141,7 @@ class EmbeddingsRequest(BaseModel):
     engine: Optional[str] = None
     input: Union[str, List[Any]]
     user: Optional[str] = None
+    encoding_format: Optional[str] = None
 
 
 class EmbeddingsResponse(BaseModel):
@@ -149,7 +153,8 @@ class EmbeddingsResponse(BaseModel):
 
 class CompletionRequest(BaseModel):
     model: str
-    prompt: Union[List[int], List[List[int]], str, List[str]]  # a string, array of strings, array of tokens, or array of token arrays
+    prompt: Union[List[int], List[List[int]], str, List[
+        str]]  # a string, array of strings, array of tokens, or array of token arrays
     suffix: Optional[str] = None
     temperature: Optional[float] = 0.7
     n: Optional[int] = 1
@@ -163,10 +168,18 @@ class CompletionRequest(BaseModel):
     frequency_penalty: Optional[float] = 0.0
     user: Optional[str] = None
 
+    # Additional parameters support for stop generation
+    stop_token_ids: Optional[List[int]] = None
+    repetition_penalty: Optional[float] = 1.1
+
     # Additional parameters supported by vLLM
     top_k: Optional[int] = -1
     ignore_eos: Optional[bool] = False
     use_beam_search: Optional[bool] = False
+
+    # Additional parameters support for code llama infilling
+    infilling: Optional[bool] = False
+    suffix_first: Optional[bool] = False
 
 
 class CompletionResponseChoice(BaseModel):

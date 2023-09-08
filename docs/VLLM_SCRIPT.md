@@ -1,8 +1,10 @@
 ## 环境配置
 
-使用 `docker` 或者本地环境二者之一
+使用 `docker` 或者本地环境两种方式之一，推荐使用 `docker`
 
 ### docker
+
+构建镜像
 
 ```shell
 docker build -f docker/Dockerfile.vllm -t llm-api:vllm .
@@ -10,12 +12,15 @@ docker build -f docker/Dockerfile.vllm -t llm-api:vllm .
 
 ### 本地环境
 
+安装依赖
+
 **`vLLM` 环境需要将 `torch` 版本升级到 `2.0.0` 以上，再安装 `vllm`**
 
 ```shell
 pip install -r requirements.txt
 pip install torch -U
-pip install git+https://github.com/vllm-project/vllm.git
+pip install vllm>=0.1.4
+# pip install git+https://github.com/vllm-project/vllm.git
 pip uninstall transformer-engine -y
 ```
 
@@ -58,25 +63,61 @@ pip uninstall transformer-engine -y
 
 选择下面两种方式之一启动模型接口服务
 
+#### docker启动
+
 1. docker run
 
-**不同模型只需要将 [.env.vllm.example](../.env.vllm.example) 文件内容复制到 `.env` 文件中，然后修改 `.env` 文件中环境变量**
+不同模型只需要将 [.env.vllm.example](../.env.vllm.example) 文件内容复制到 `.env` 文件中
+
+```shell
+cp .env.vllm.example .env
+```
+
+然后修改 `.env` 文件中的环境变量
 
 ```shell
 docker run -it -d --gpus all --ipc=host -p 7891:8000 --name=vllm-server \
     --ulimit memlock=-1 --ulimit stack=67108864 \
     -v `pwd`:/workspace \
     llm-api:vllm \
-    python api/vllm_server.py
+    python api/server.py
 ```
 
-2. docker-compose
+2. docker compose
 
 ```shell
 docker-compose -f docker-compose.vllm.yml up -d
 ```
 
-**其中环境变量修改内容参考下面的模型**
+#### 本地启动
+
+同样的，将 [.env.vllm.example](../.env.vllm.example) 文件内容复制到 `.env` 文件中
+
+```shell
+cp .env.vllm.example .env
+```
+
+然后修改 `.env` 文件中的环境变量
+
+```shell
+cp api/server.py .
+python server.py
+```
+
+## 环境变量修改参考
+
+**环境变量修改内容参考下面**
+
++ [code-llama](https://github.com/xusenlinzy/api-for-open-llm/blob/master/docs/VLLM_SCRIPT.md#code-llama) 
+
++ [sqlcoder](https://github.com/xusenlinzy/api-for-open-llm/blob/master/docs/VLLM_SCRIPT.md#sqlcoder) 
+
++ [qwen-7b-chat](https://github.com/xusenlinzy/api-for-open-llm/blob/master/docs/VLLM_SCRIPT.md#qwen-7b-chat)
+
++ [baichuan-13b-chat](https://github.com/xusenlinzy/api-for-open-llm/blob/master/docs/VLLM_SCRIPT.md#baichuan-13b-chat)
+
++ [internlm](https://github.com/xusenlinzy/api-for-open-llm/blob/master/docs/VLLM_SCRIPT.md#internlm)      
+
 
 ### Qwen-7b-chat
 
@@ -115,4 +156,18 @@ defog/sqlcoder:
 MODEL_NAME=starcode
 MODEL_PATH=defog/sqlcoder
 TENSOR_PARALLEL_SIZE=2
+```
+
+### CODE-LLAMA
+
+```shell
+pip install git+https://github.com/huggingface/transformers.git
+pip install git+https://github.com/vllm-project/vllm.git
+```
+
+codellama/CodeLlama-7b-Instruct-hf
+
+```shell
+MODEL_NAME=code-llama
+MODEL_PATH=codellama/CodeLlama-7b-Instruct-hf
 ```

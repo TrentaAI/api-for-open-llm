@@ -1,14 +1,18 @@
 ## 环境配置
 
-使用 `docker` 或者本地环境二者之一
+使用 `docker` 或者本地环境两种方式之一，推荐使用 `docker`
 
 ### docker
+
+构建镜像
 
 ```shell
 docker build -f docker/Dockerfile -t llm-api:pytorch .
 ```
 
 ### 本地环境
+
+安装依赖
 
 ```shell
 pip install torch==1.13.1
@@ -55,22 +59,30 @@ pip install -r requirements.txt
 + `PROMPT_NAME`（可选项）: 使用的对话模板名称，如果不指定，则将根据模型名找到对应的模板
 
 
-+ `PATCH_TYPE`（可选项）: 用来扩展 `llama` 模型上下文长度的长度，支持 [`ntk`](https://kexue.fm/archives/9706) 和 [`rerope`](https://spaces.ac.cn/archives/9708)
++ `PATCH_TYPE`（可选项）: 用来扩展 `llama` 模型上下文长度，支持 `attention` 和 `ntk`
 
 
-+ `TRAINING_LENGTH`（可选项）: 用来扩展 `llama` 模型上下文长度的长度，训练长度
++ `ALPHA`（可选项）: 用来扩展 `llama` 模型上下文长度，默认为 `auto`
 
-
-+ `WINDOW_SIZE`（可选项）: 用来扩展 `llama` 模型上下文长度的长度，窗口大小，小于训练长度
 
 
 ### 启动方式
 
 选择下面两种方式之一启动模型接口服务
 
+
+#### docker启动
+
 1. docker run
 
-**不同模型只需要将 [.env.example](../.env.example) 文件内容复制到 `.env` 文件中，然后修改 `.env` 文件中环境变量**
+不同模型只需要将 [.env.example](../.env.example) 文件内容复制到 `.env` 文件中
+
+```shell
+cp .env.example .env
+```
+
+然后修改 `.env` 文件中的环境变量
+
 
 ```shell
 docker run -it -d --gpus all --ipc=host -p 7891:8000 --name=llm-api \
@@ -80,13 +92,61 @@ docker run -it -d --gpus all --ipc=host -p 7891:8000 --name=llm-api \
     python api/server.py
 ```
 
-2. docker-compose
+2. docker compose
 
 ```shell
 docker-compose up -d
 ```
 
-**其中环境变量修改内容参考下面的模型**
+#### 本地启动
+
+同样的，将 [.env.example](../.env.example) 文件内容复制到 `.env` 文件中
+
+```shell
+cp .env.example .env
+```
+
+然后修改 `.env` 文件中的环境变量
+
+```shell
+cp api/server.py .
+python server.py
+```
+
+
+## 环境变量修改参考
+
+**环境变量修改内容参考下面**
+
++ [baichuan2](https://github.com/xusenlinzy/api-for-open-llm/blob/master/docs/SCRIPT.md#baichuan2)
+
++ [code-llama](https://github.com/xusenlinzy/api-for-open-llm/blob/master/docs/SCRIPT.md#code-llama)
+
++ [sqlcoder](https://github.com/xusenlinzy/api-for-open-llm/blob/master/docs/SCRIPT.md#sqlcoder)  
+
++ [xverse-13b-chat](https://github.com/xusenlinzy/api-for-open-llm/blob/master/docs/SCRIPT.md#xverse-13b-chat) 
+
++ [qwen-7b-chat](https://github.com/xusenlinzy/api-for-open-llm/blob/master/docs/SCRIPT.md#qwen-7b-chat)
+
++ [aquila-chat-7b](https://github.com/xusenlinzy/api-for-open-llm/blob/master/docs/SCRIPT.md#aquilachat-7b)  
+
++ [starchat](https://github.com/xusenlinzy/api-for-open-llm/blob/master/docs/SCRIPT.md#starchat)       
+
++ [baichuan-13b-chat](https://github.com/xusenlinzy/api-for-open-llm/blob/master/docs/SCRIPT.md#baichuan-13b-chat) 
+
++ [internlm](https://github.com/xusenlinzy/api-for-open-llm/blob/master/docs/SCRIPT.md#internlm)      
+
++ [baichuan-7b](https://github.com/xusenlinzy/api-for-open-llm/blob/master/docs/SCRIPT.md#baichuan-7b)    
+
++ [openbuddy](https://github.com/xusenlinzy/api-for-open-llm/blob/master/docs/SCRIPT.md#openbuddy)      
+
++ [chatglm](https://github.com/xusenlinzy/api-for-open-llm/blob/master/docs/SCRIPT.md#chatglm)        
+
++ [moss](https://github.com/xusenlinzy/api-for-open-llm/blob/master/docs/SCRIPT.md#moss)         
+
++ [phoenix](https://github.com/xusenlinzy/api-for-open-llm/blob/master/docs/SCRIPT.md#phoenix)     
+
++ [tiger](https://github.com/xusenlinzy/api-for-open-llm/blob/master/docs/SCRIPT.md#tiger)       
 
 ### ChatGLM
 
@@ -239,4 +299,64 @@ MODEL_NAME=starcode
 MODEL_PATH=defog/sqlcoder
 DEVICE_MAP=auto
 # LOAD_IN_8BIT=true
+```
+
+### CODE-LLAMA
+
+codellama/CodeLlama-7b-Instruct-hf
+
+```shell
+MODEL_NAME=code-llama
+MODEL_PATH=codellama/CodeLlama-7b-Instruct-hf
+```
+
+### Wizard-Coder
+
+WizardLM/WizardCoder-Python-34B-V1.0
+
+```shell
+MODEL_NAME=code-llama
+MODEL_PATH=WizardLM/WizardCoder-Python-34B-V1.0
+PROMPT_NAME=alpaca
+DEVICE_MAP=auto
+```
+
+
+### Baichuan2
+
+`Baichuan2` 系列模型中，为了加快推理速度使用了 `pytorch2.0` 加入的新功能 `F.scaled_dot_product_attention`，因此需要在 `pytorch2.0` 环境下运行
+
+可以使用下面的命令升级 `llm-api:pytorch` 环境，或者直接使用 `llm-api:vllm` 环境
+
+```shell
+pip install torch -U
+# pip uninstall transformer-engine -y
+```
+
+baichuan-inc/Baichuan2-13B-Chat
+
+```shell
+MODEL_NAME=baichuan2-13b-chat
+MODEL_PATH=baichuan-inc/Baichuan2-13B-Chat
+DEVICE_MAP=auto
+DTYPE=bfloat16
+```
+
+`BitsAndBytes` 量化
+
+```shell
+MODEL_NAME=baichuan2-13b-chat
+MODEL_PATH=baichuan-inc/Baichuan2-13B-Chat
+DEVICE_MAP=auto
+LOAD_IN_8BIT=true
+```
+
+在线量化
+
+```shell
+MODEL_NAME=baichuan2-13b-chat
+MODEL_PATH=baichuan-inc/Baichuan2-13B-Chat
+DEVICE_MAP=
+DTYPE=half
+QUANTIZE=8
 ```

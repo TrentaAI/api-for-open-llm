@@ -3,10 +3,14 @@
 import json
 import os
 
-import openai
+from langchain.llms import OpenAI
 
-openai.api_key = "EMPTY"
-openai.api_base = "http://192.168.0.53:7891/v1"
+llm = OpenAI(
+    model_name="qwen",
+    temperature=0,
+    openai_api_base="http://192.168.0.53:7891/v1",
+    openai_api_key="xxx",
+)
 
 
 # 将一个插件的关键信息拼接成一段文本的模版。
@@ -120,14 +124,7 @@ def text_completion(input_text: str, stop_words) -> str:  # 作为一个文本�
     im_end = "<|im_end|>"
     if im_end not in stop_words:
         stop_words = stop_words + [im_end]
-    response = openai.Completion.create(
-        model="qwen",
-        prompt=input_text,
-        temperature=0,
-        stop=stop_words,
-    )
-    output = response.choices[0].text
-    return output  # 续写 input_text 的结果，不包含 input_text 的内容
+    return llm(input_text, stop=stop_words)  # 续写 input_text 的结果，不包含 input_text 的内容
 
 
 def parse_latest_plugin_call(text):

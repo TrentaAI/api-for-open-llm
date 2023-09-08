@@ -2,17 +2,15 @@ import time
 from http import HTTPStatus
 from typing import AsyncGenerator, Optional
 
-from fastapi import APIRouter
-from fastapi import BackgroundTasks, Request
+from fastapi import APIRouter, BackgroundTasks, Request, Depends
 from fastapi.responses import StreamingResponse
-from vllm.logger import init_logger
 from vllm.outputs import RequestOutput
 from vllm.sampling_params import SamplingParams
 from vllm.utils import random_uuid
 
 from api.config import config
 from api.models import VLLM_ENGINE
-from api.routes.utils import create_error_response
+from api.routes.utils import check_api_key
 from api.utils.protocol import (
     CompletionRequest,
     CompletionResponseStreamChoice,
@@ -25,12 +23,11 @@ from api.utils.protocol import (
 )
 from api.vllm_routes.utils import create_error_response, get_model_inputs
 
-logger = init_logger(__name__)
 completion_router = APIRouter()
 
 
-@completion_router.post("/completions")
-async def create_completion(raw_request: Request):
+@completion_router.post("/completions", dependencies=[Depends(check_api_key)])
+async def create_completion(request: CompletionRequest, raw_request: Request):
     """Completion API similar to OpenAI's API.
 
     See https://platform.openai.com/docs/api-reference/completions/create
@@ -43,8 +40,11 @@ async def create_completion(raw_request: Request):
           suffix)
         - logit_bias (to be supported by vLLM engine)
     """
-    request = CompletionRequest(**await raw_request.json())
-    logger.info(f"Received completion request: {request}")
+    if len(request.prompt) < 1:
+        return create_error_response(
+            HTTPStatus.BAD_REQUEST,
+            "Invalid request: prompt is empty"
+        )
 
     if request.echo:
         # We do not support echo since the vLLM engine does not
@@ -76,6 +76,19 @@ async def create_completion(raw_request: Request):
     token_ids, error_check_ret = await get_model_inputs(request, prompt, config.MODEL_NAME.lower())
     if error_check_ret is not None:
         return error_check_ret
+
+    # stop settings
+    stop = []
+    if VLLM_ENGINE.prompt_adapter.stop is not None:
+        stop = VLLM_ENGINE.prompt_adapter.stop.get("strings", [])
+
+    request.stop = request.stop or []
+    if isinstance(request.stop, str):
+        request.stop = [request.stop]
+    request.stop = list(set(stop + request.stop))
+
+    if request.infilling:
+        request.stop.append(VLLM_ENGINE.engine.tokenizer.eot_token.replace("▁", ""))
 
     created_time = int(time.time())
     try:
