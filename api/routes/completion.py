@@ -1,150 +1,70 @@
-import json
-import secrets
-import time
+from functools import partial
+from typing import Iterator
 
-from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import StreamingResponse
-from loguru import logger
+import anyio
+from fastapi import APIRouter, Depends, HTTPException, Request
+from sse_starlette import EventSourceResponse
+from starlette.concurrency import run_in_threadpool
 
-from api.models import GENERATE_MDDEL
-from api.routes.utils import check_requests, create_error_response, check_api_key
-from api.utils.protocol import (
-    CompletionRequest,
-    CompletionResponseStreamChoice,
-    CompletionStreamResponse,
-    UsageInfo,
+from api.models import GENERATE_ENGINE
+from api.utils.protocol import CompletionCreateParams
+from api.utils.request import (
+    handle_request,
+    check_api_key,
+    get_event_publisher,
 )
-from api.utils.protocol import CompletionResponse, CompletionResponseChoice
 
 completion_router = APIRouter()
 
 
-@completion_router.post("/completions", dependencies=[Depends(check_api_key)])
-async def create_completion(request: CompletionRequest):
-    error_check_ret = check_requests(request)
-    if error_check_ret is not None:
-        return error_check_ret
+def get_engine():
+    yield GENERATE_ENGINE
 
-    start_time = time.time()
+
+@completion_router.post("/completions", dependencies=[Depends(check_api_key)])
+async def create_completion(
+    request: CompletionCreateParams,
+    raw_request: Request,
+    engine=Depends(get_engine),
+):
     if isinstance(request.prompt, str):
-        if len(request.prompt) < 1:
-            raise HTTPException(status_code=400, detail="Invalid request")
         request.prompt = [request.prompt]
 
-    # stop settings
-    stop, stop_token_ids = [], []
-    if GENERATE_MDDEL.stop is not None:
-        stop_token_ids = GENERATE_MDDEL.stop.get("token_ids", [])
-        stop = GENERATE_MDDEL.stop.get("strings", [])
+    if len(request.prompt) < 1:
+        raise HTTPException(status_code=400, detail="Invalid request")
 
-    request.stop = request.stop or []
-    if isinstance(request.stop, str):
-        request.stop = [request.stop]
-    request.stop = list(set(stop + request.stop))
+    request, stop_token_ids = await handle_request(request, engine.stop, chat=False)
+    request.max_tokens = request.max_tokens or 128
 
-    request.stop_token_ids = request.stop_token_ids or []
-    request.stop_token_ids = list(set(stop_token_ids + request.stop_token_ids))
-
-    if request.stream:
-        generator = generate_completion_stream_generator(request)
-        return StreamingResponse(generator, media_type="text/event-stream")
-    else:
-        text_completions = []
-        for text in request.prompt:
-            gen_params = dict(
-                model=request.model,
-                prompt=text,
-                temperature=request.temperature,
-                top_p=request.top_p,
-                max_tokens=request.max_tokens or 1024,
-                echo=request.echo,
-                stream=request.stream,
-                stop_token_ids=request.stop_token_ids,
-                stop=request.stop,
-                infilling=request.infilling,
-                suffix_first=request.suffix_first,
-                repetition_penalty=request.repetition_penalty,
-            )
-            for i in range(request.n):
-                content = GENERATE_MDDEL.generate_gate(gen_params)
-                text_completions.append(content)
-
-        choices = []
-        usage = UsageInfo()
-        for i, content in enumerate(text_completions):
-            if content["error_code"] != 0:
-                return create_error_response(content["error_code"], content["text"])
-
-            choices.append(
-                CompletionResponseChoice(
-                    index=i,
-                    text=content["text"],
-                    logprobs=content.get("logprobs", None),
-                    finish_reason=content.get("finish_reason", "stop"),
-                )
-            )
-
-            task_usage = UsageInfo.parse_obj(content["usage"])
-            for usage_key, usage_value in task_usage.dict().items():
-                setattr(usage, usage_key, getattr(usage, usage_key) + usage_value)
-
-        logger.info(f"consume time  = {(time.time() - start_time)}s, response = {str(choices)}")
-        return CompletionResponse(
-            model=request.model, choices=choices, usage=UsageInfo.parse_obj(usage)
+    params = request.model_dump()
+    params.update(
+        dict(
+            prompt_or_messages=request.prompt[0],
+            stop_token_ids=stop_token_ids,
         )
+    )
 
+    iterator_or_completion = await run_in_threadpool(engine.create_completion, params)
 
-async def generate_completion_stream_generator(request: CompletionRequest):
-    model_name = request.model
-    _id = f"cmpl-{secrets.token_hex(12)}"
-    finish_stream_events = []
+    if isinstance(iterator_or_completion, Iterator):
+        # It's easier to ask for forgiveness than permission
+        first_response = await run_in_threadpool(next, iterator_or_completion)
 
-    for text in request.prompt:
-        for i in range(request.n):
-            previous_text = ""
-            payload = dict(
-                model=request.model,
-                prompt=text,
-                temperature=request.temperature,
-                top_p=request.top_p,
-                max_tokens=request.max_tokens or 1024,
-                echo=request.echo,
-                stream=request.stream,
-                stop_token_ids=request.stop_token_ids,
-                stop=request.stop,
-                infilling=request.infilling,
-                suffix_first=request.suffix_first,
-                repetition_penalty=request.repetition_penalty,
-            )
+        # If no exception was raised from first_response, we can assume that
+        # the iterator is valid, and we can use it to stream the response.
+        def iterator() -> Iterator:
+            yield first_response
+            yield from iterator_or_completion
 
-            for content in GENERATE_MDDEL.generate_stream_gate(payload):
-                if content["error_code"] != 0:
-                    yield f"data: {json.dumps(content, ensure_ascii=False)}\n\n"
-                    yield "data: [DONE]\n\n"
-                    return
-
-                decoded_unicode = content["text"].replace("\ufffd", "")
-                delta_text = decoded_unicode[len(previous_text):]
-                previous_text = decoded_unicode
-
-                choice_data = CompletionResponseStreamChoice(
-                    index=i,
-                    text=delta_text,
-                    logprobs=content.get("logprobs", None),
-                    finish_reason=content.get("finish_reason", None),
-                )
-                chunk = CompletionStreamResponse(
-                    id=_id, object="text_completion", choices=[choice_data], model=model_name
-                )
-                if len(delta_text) == 0:
-                    if content.get("finish_reason", None) is not None:
-                        finish_stream_events.append(chunk)
-                    continue
-
-                yield f"data: {chunk.json(exclude_unset=True, ensure_ascii=False)}\n\n"
-
-    # There is not "content" field in the last delta message, so exclude_none to exclude field "content".
-    for finish_chunk in finish_stream_events:
-        yield f"data: {finish_chunk.json(exclude_unset=True, ensure_ascii=False)}\n\n"
-
-    yield "data: [DONE]\n\n"
+        send_chan, recv_chan = anyio.create_memory_object_stream(10)
+        return EventSourceResponse(
+            recv_chan,
+            data_sender_callable=partial(
+                get_event_publisher,
+                request=raw_request,
+                inner_send_chan=send_chan,
+                iterator=iterator(),
+            ),
+        )
+    else:
+        return iterator_or_completion

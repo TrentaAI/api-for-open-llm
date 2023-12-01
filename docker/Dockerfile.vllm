@@ -1,12 +1,12 @@
-FROM nvcr.io/nvidia/pytorch:22.12-py3
+FROM nvcr.io/nvidia/pytorch:23.10-py3
 
 WORKDIR /workspace/
 ENV PYTHONPATH /workspace/
 COPY requirements.txt /workspace/
 COPY . /workspace
 
-RUN pip install --no-cache-dir -r /workspace/requirements.txt -i https://mirror.baidu.com/pypi/simple
-RUN pip install bitsandbytes --upgrade -i https://mirror.baidu.com/pypi/simple && \
-    pip install torch -U -i https://mirror.baidu.com/pypi/simple && \
-    pip install vllm>=0.1.4 && \
+RUN pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple && \
+    pip install bitsandbytes --upgrade && \
+    pip install vllm>=0.2.2 && \
+    pip install --no-cache-dir -r /workspace/requirements.txt && \
     pip uninstall transformer-engine -y

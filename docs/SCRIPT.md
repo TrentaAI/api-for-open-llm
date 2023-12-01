@@ -15,7 +15,7 @@ docker build -f docker/Dockerfile -t llm-api:pytorch .
 安装依赖
 
 ```shell
-pip install torch==1.13.1
+pip install torch>=1.13.1
 pip install -r requirements.txt
 ```
 
@@ -118,6 +118,12 @@ python server.py
 
 **环境变量修改内容参考下面**
 
++ [deepseek](https://github.com/xusenlinzy/api-for-open-llm/blob/master/docs/SCRIPT.md#deepseekchat)
+
++ [deepseek-coder](https://github.com/xusenlinzy/api-for-open-llm/blob/master/docs/SCRIPT.md#deepseekcoder)
+
++ [yi-chat](https://github.com/xusenlinzy/api-for-open-llm/blob/master/docs/SCRIPT.md#yi-chat)
+
 + [baichuan2](https://github.com/xusenlinzy/api-for-open-llm/blob/master/docs/SCRIPT.md#baichuan2)
 
 + [code-llama](https://github.com/xusenlinzy/api-for-open-llm/blob/master/docs/SCRIPT.md#code-llama)
@@ -171,6 +177,13 @@ MODEL_NAME=chatglm
 MODEL_PATH=THUDM/chatglm-6b
 ADAPTER_MODEL_PATH=ptuing_v2_chekpint_dir
 USING_PTUNING_V2=true
+```
+
+### ChatGLM3:
+
+```shell
+MODEL_NAME=chatglm3
+MODEL_PATH=THUDM/chatglm3-6b
 ```
 
 ### MOSS
@@ -279,6 +292,36 @@ MODEL_PATH=Qwen/Qwen-7B-Chat
 DEVICE_MAP=auto
 ```
 
+### Qwen-14b-chat
+
+Qwen/Qwen-14B-Chat:
+
+```shell
+MODEL_NAME=qwen
+MODEL_PATH=Qwen/Qwen-14B-Chat
+DEVICE_MAP=auto
+```
+
+Qwen/Qwen-14B-Chat-Int4:
+
+本地环境安装下面的依赖包
+
+```shell
+pip install auto-gptq optimum
+```
+
+`docker` 环境使用下面的命令构建一个新的 `GPTQ` 镜像，并基于此镜像启动模型
+
+```shell
+docker build -f docker/Dockerfile.gptq -t llm-api:gptq .
+```
+
+```shell
+MODEL_NAME=qwen
+MODEL_PATH=Qwen/Qwen-14B-Chat-Int4
+DEVICE_MAP=auto
+```
+
 
 ### XVERSE-13B-Chat
 
@@ -359,4 +402,56 @@ MODEL_PATH=baichuan-inc/Baichuan2-13B-Chat
 DEVICE_MAP=
 DTYPE=half
 QUANTIZE=8
+```
+
+### Xwin-LM
+
+Xwin-LM/Xwin-LM-7B-V0.1
+
+```shell
+MODEL_NAME=xwin-7b
+MODEL_PATH=Xwin-LM/Xwin-LM-7B-V0.1
+PROMPT_NAME=vicuna
+```
+
+### XuanYuan
+
+Duxiaoman-DI/XuanYuan-70B-Chat
+
+```shell
+MODEL_NAME=llama2
+MODEL_PATH=Duxiaoman-DI/XuanYuan-70B-Chat
+PROMPT_NAME=xuanyuan
+```
+
+### Yi-Chat
+
+01-ai/Yi-34B-Chat
+
+```shell
+MODEL_NAME=yi-chat
+MODEL_PATH=01-ai/Yi-34B-Chat
+PROMPT_NAME=yi
+DEVICE_MAP=auto
+```
+
+### DeepSeekCoder
+
+deepseek-ai/deepseek-coder-33b-instruct
+
+```shell
+MODEL_NAME=deepseek-coder
+MODEL_PATH=deepseek-ai/deepseek-coder-33b-instruct
+DEVICE_MAP=auto
+```
+
+
+### DeepseekChat
+
+deepseek-ai/deepseek-llm-67b-chat
+
+```shell
+MODEL_NAME=deepseek
+MODEL_PATH=deepseek-ai/deepseek-llm-67b-chat
+DEVICE_MAP=auto
 ```
